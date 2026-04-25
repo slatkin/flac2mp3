@@ -3,12 +3,12 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: $0 -s SERVER [-u USERNAME] [-p PASSWORD] [PATH]
+Usage: $0 -s SERVER [-u USERNAME] [-p PASSWORD] [PATH ...]
 
 Converts FLAC files to 128kbps MP3 and uploads them via FTP to SERVER
-under a folder named after the target directory. PATH may be absolute or
-relative; defaults to the current directory.
-Defaults to anonymous FTP if no credentials are provided.
+under a folder named after each target directory. PATH may be absolute,
+relative, or a glob pattern (e.g. /music/albums/*); defaults to the
+current directory. Defaults to anonymous FTP if no credentials are provided.
 
 Options:
   -s SERVER    FTP server hostname or IP
@@ -18,6 +18,68 @@ Options:
 EOF
     exit 1
 }
+
+for arg in "$@"; do
+    if [[ "$arg" == "--wordup" ]]; then
+        lines=(
+            "Oh!"
+            "Yo, pretty ladies around the world"
+            "Got a weird thing to show you"
+            "So tell all the boys and girls"
+            "Tell yo brother, yo sister"
+            "And yo momma too"
+            "'Cause we're about to throw down"
+            "And you'll know just what to do"
+            "Wave your hands in the air"
+            "Like you don't care"
+            "Glide by the people as they start to look and stare"
+            "Do your dance, do your dance"
+            "Do your dance quick, mama"
+            "Come on baby, tell me, what's the word?"
+            "Oh, word up!"
+            "Everybody say when you hear their call"
+            "You've got to get it underway"
+            "Word up! It's the code word"
+            "No matter where you say it"
+            "You'll know that you'll be heard"
+            "Now all you sucker DJs"
+            "Who think you're fly"
+            "There's got to be a reason"
+            "And we know the reason why"
+            "You try to put on those airs and act real cool"
+            "But you've got to realize"
+            "That you're acting like fools"
+            "Give us music, we can use it"
+            "We need to dance"
+            "We don't have the time"
+            "For psychological romance"
+            "No romance, no romance"
+            "No romance for me, mama"
+            "Come on baby, tell me what's the word"
+            "Dial \"L\" for low..."
+            "Come on, all you people say..."
+            "W-O-R-D up - W-O-R-D up"
+            "W-O-R-D UP"
+            "W-O-R-D up (hey)"
+            "Hey (hey you) hey, hey (what)"
+            "(hey-ey-ey Hey whew)"
+            "La, la, la, la, la, la, low (low)"
+            "(whew whoo whoo, woah)"
+            "Say it like that, (like that)"
+            "Say it like that, ya'll know it (woah)"
+            "What's the word? (What's (Woah!) the word?)"
+            "Everybody's got to know-ow (woah yeah)"
+            "Everybody say it, woah!"
+            "Low"
+            "They think real low (Oww!)"
+            "As low as you go (whew)"
+            "Ahhhh, low, low, low, low"
+            "As low as you go, man..."
+        )
+        echo "${lines[$((RANDOM % ${#lines[@]}))]}"
+        exit 0
+    fi
+done
 
 SERVER=""
 USERNAME="anonymous"
@@ -40,31 +102,12 @@ if [[ -z "$SERVER" ]]; then
     usage
 fi
 
-TARGET_DIR="${1:-.}"
-TARGET_DIR=$(realpath "$TARGET_DIR")
-
-if [[ ! -d "$TARGET_DIR" ]]; then
-    echo "Error: directory not found: $TARGET_DIR"
-    exit 1
-fi
+TARGET_DIRS=("${@:-.}")
 
 if ! command -v curl &>/dev/null; then
     echo "Error: curl is required"
     exit 1
 fi
-
-FLAC_FILES=()
-while IFS= read -r -d '' f; do
-    FLAC_FILES+=("$f")
-done < <(find "$TARGET_DIR" -maxdepth 1 -name "*.flac" -print0 | sort -z)
-
-if [[ ${#FLAC_FILES[@]} -eq 0 ]]; then
-    echo "No FLAC files found in $TARGET_DIR"
-    exit 1
-fi
-
-REMOTE_DIR=$(basename "$TARGET_DIR")
-REMOTE_DIR_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$REMOTE_DIR")
 
 echo "Checking FTP connectivity to $SERVER ..."
 if ! curl --silent --show-error \
@@ -79,33 +122,67 @@ fi
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "Converting ${#FLAC_FILES[@]} FLAC file(s) to 128kbps MP3..."
-for flac in "${FLAC_FILES[@]}"; do
-    base=$(basename "$flac" .flac)
-    echo "  $base.flac -> $base.mp3"
-    ffmpeg -i "$flac" -map_metadata 0 -b:a 128k "$TMPDIR/$base.mp3" \
-        -y -loglevel error
+shopt -s nullglob
+
+for pattern in "${TARGET_DIRS[@]}"; do
+    dirs=($pattern)
+    if [[ ${#dirs[@]} -eq 0 ]]; then
+        echo "Warning: no matches for '$pattern'"
+        continue
+    fi
+    for TARGET_DIR in "${dirs[@]}"; do
+        TARGET_DIR=$(realpath -- "$TARGET_DIR")
+
+        if [[ ! -d "$TARGET_DIR" ]]; then
+            echo "Warning: skipping '$TARGET_DIR': not a directory"
+            continue
+        fi
+
+        FLAC_FILES=()
+        while IFS= read -r -d '' f; do
+            FLAC_FILES+=("$f")
+        done < <(find "$TARGET_DIR" -maxdepth 1 -name "*.flac" -print0 | sort -z)
+
+        if [[ ${#FLAC_FILES[@]} -eq 0 ]]; then
+            echo "No FLAC files found in $TARGET_DIR, skipping"
+            continue
+        fi
+
+        REMOTE_DIR=$(basename "$TARGET_DIR")
+        REMOTE_DIR_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$REMOTE_DIR")
+        FTP_BASE="ftp://$SERVER/foobar2000%20Music%20Folder/Albums/$REMOTE_DIR_ENC"
+        DIR_TMP="$TMPDIR/$REMOTE_DIR"
+        mkdir -p "$DIR_TMP"
+
+        echo "Converting ${#FLAC_FILES[@]} FLAC file(s) in '$REMOTE_DIR' to 128kbps MP3..."
+        for flac in "${FLAC_FILES[@]}"; do
+            base=$(basename "$flac" .flac)
+            echo "  $base.flac -> $base.mp3"
+            ffmpeg -i "$flac" -map_metadata 0 -b:a 128k "$DIR_TMP/$base.mp3" \
+                -y -loglevel error
+        done
+
+        echo "Creating remote directory $FTP_BASE/ ..."
+        curl --silent --show-error \
+            --user "$USERNAME:$PASSWORD" \
+            --ftp-create-dirs \
+            "$FTP_BASE/" \
+            --upload-file /dev/null
+
+        echo "Uploading to $FTP_BASE/ ..."
+        for mp3 in "$DIR_TMP"/*.mp3; do
+            name=$(basename "$mp3")
+            name_enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
+            echo "  $name"
+            curl --silent --show-error \
+                --user "$USERNAME:$PASSWORD" \
+                --ftp-create-dirs \
+                --upload-file "$mp3" \
+                "$FTP_BASE/$name_enc"
+        done
+
+        echo "Done — uploaded to $FTP_BASE/"
+    done
 done
 
-FTP_BASE="ftp://$SERVER/foobar2000%20Music%20Folder/Albums/$REMOTE_DIR_ENC"
-
-echo "Creating remote directory $FTP_BASE/ ..."
-curl --silent --show-error \
-    --user "$USERNAME:$PASSWORD" \
-    --ftp-create-dirs \
-    "$FTP_BASE/" \
-    --upload-file /dev/null
-
-echo "Uploading to $FTP_BASE/ ..."
-for mp3 in "$TMPDIR"/*.mp3; do
-    name=$(basename "$mp3")
-    name_enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
-    echo "  $name"
-    curl --silent --show-error \
-        --user "$USERNAME:$PASSWORD" \
-        --ftp-create-dirs \
-        --upload-file "$mp3" \
-        "$FTP_BASE/$name_enc"
-done
-
-echo "Done — uploaded to $FTP_BASE/"
+shopt -u nullglob
