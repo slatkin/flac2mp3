@@ -54,6 +54,17 @@ fi
 
 REMOTE_DIR=$(basename "$PWD")
 REMOTE_DIR_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$REMOTE_DIR")
+
+echo "Checking FTP connectivity to $SERVER ..."
+if ! curl --silent --show-error \
+        --user "$USERNAME:$PASSWORD" \
+        --max-time 10 \
+        "ftp://$SERVER/" \
+        --head &>/dev/null; then
+    echo "Error: cannot reach FTP server $SERVER"
+    exit 1
+fi
+
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
