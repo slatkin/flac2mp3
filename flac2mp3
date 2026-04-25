@@ -3,10 +3,11 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: $0 -s SERVER [-u USERNAME] [-p PASSWORD]
+Usage: $0 -s SERVER [-u USERNAME] [-p PASSWORD] [PATH]
 
-Converts FLAC files in the current directory to 128kbps MP3 and uploads
-them via FTP to SERVER under a folder named after the current directory.
+Converts FLAC files to 128kbps MP3 and uploads them via FTP to SERVER
+under a folder named after the target directory. PATH may be absolute or
+relative; defaults to the current directory.
 Defaults to anonymous FTP if no credentials are provided.
 
 Options:
@@ -32,9 +33,19 @@ while getopts "s:u:p:h" opt; do
     esac
 done
 
+shift $((OPTIND - 1))
+
 if [[ -z "$SERVER" ]]; then
     echo "Error: -s is required"
     usage
+fi
+
+TARGET_DIR="${1:-.}"
+TARGET_DIR=$(realpath "$TARGET_DIR")
+
+if [[ ! -d "$TARGET_DIR" ]]; then
+    echo "Error: directory not found: $TARGET_DIR"
+    exit 1
 fi
 
 if ! command -v curl &>/dev/null; then
@@ -45,14 +56,14 @@ fi
 FLAC_FILES=()
 while IFS= read -r -d '' f; do
     FLAC_FILES+=("$f")
-done < <(find . -maxdepth 1 -name "*.flac" -print0 | sort -z)
+done < <(find "$TARGET_DIR" -maxdepth 1 -name "*.flac" -print0 | sort -z)
 
 if [[ ${#FLAC_FILES[@]} -eq 0 ]]; then
-    echo "No FLAC files found in current directory"
+    echo "No FLAC files found in $TARGET_DIR"
     exit 1
 fi
 
-REMOTE_DIR=$(basename "$PWD")
+REMOTE_DIR=$(basename "$TARGET_DIR")
 REMOTE_DIR_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$REMOTE_DIR")
 
 echo "Checking FTP connectivity to $SERVER ..."
