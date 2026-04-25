@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $0 -s SERVER [-u USERNAME] [-p PASSWORD]
+
+Converts FLAC files in the current directory to 128kbps MP3 and uploads
+them via FTP to SERVER under a folder named after the current directory.
+Defaults to anonymous FTP if no credentials are provided.
+
+Options:
+  -s SERVER    FTP server hostname or IP
+  -u USERNAME  FTP username (default: anonymous)
+  -p PASSWORD  FTP password (default: empty)
+  -h           Show this help
+EOF
+    exit 1
+}
+
+SERVER=""
+USERNAME="anonymous"
+PASSWORD=""
+
+while getopts "s:u:p:h" opt; do
+    case $opt in
+        s) SERVER="$OPTARG" ;;
+        u) USERNAME="$OPTARG" ;;
+        p) PASSWORD="$OPTARG" ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+
+if [[ -z "$SERVER" ]]; then
+    echo "Error: -s is required"
+    usage
+fi
+
+if ! command -v curl &>/dev/null; then
+    echo "Error: curl is required"
+    exit 1
+fi
+
+FLAC_FILES=()
+while IFS= read -r -d '' f; do
+    FLAC_FILES+=("$f")
+done < <(find . -maxdepth 1 -name "*.flac" -print0 | sort -z)
+
+if [[ ${#FLAC_FILES[@]} -eq 0 ]]; then
+    echo "No FLAC files found in current directory"
+    exit 1
+fi
+
+REMOTE_DIR=$(basename "$PWD")
+REMOTE_DIR_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$REMOTE_DIR")
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "Converting ${#FLAC_FILES[@]} FLAC file(s) to 128kbps MP3..."
+for flac in "${FLAC_FILES[@]}"; do
+    base=$(basename "$flac" .flac)
+    echo "  $base.flac -> $base.mp3"
+    ffmpeg -i "$flac" -map_metadata 0 -b:a 128k "$TMPDIR/$base.mp3" \
+        -y -loglevel error
+done
+
+FTP_BASE="ftp://$SERVER/foobar2000%20Music%20Folder/Albums/$REMOTE_DIR_ENC"
+
+echo "Creating remote directory $FTP_BASE/ ..."
+curl --silent --show-error \
+    --user "$USERNAME:$PASSWORD" \
+    --ftp-create-dirs \
+    "$FTP_BASE/" \
+    --upload-file /dev/null
+
+echo "Uploading to $FTP_BASE/ ..."
+for mp3 in "$TMPDIR"/*.mp3; do
+    name=$(basename "$mp3")
+    name_enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
+    echo "  $name"
+    curl --silent --show-error \
+        --user "$USERNAME:$PASSWORD" \
+        --ftp-create-dirs \
+        --upload-file "$mp3" \
+        "$FTP_BASE/$name_enc"
+done
+
+echo "Done — uploaded to $FTP_BASE/"
